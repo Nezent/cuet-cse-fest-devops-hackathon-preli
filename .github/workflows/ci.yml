@@ -1,0 +1,78 @@
+name: Deploy to Azure
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    name: Deploy to Azure VM
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Create deployment package
+        run: |
+          mkdir -p deploy
+          # Copy docker compose files
+          cp -r docker deploy/
+          # Copy service directories with their Dockerfiles
+          cp -r backend deploy/
+          cp -r gateway deploy/
+          # Copy Makefile for convenience
+          cp Makefile deploy/
+          tar -czf deploy.tar.gz deploy/
+
+      - name: Copy files to Azure VM
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          password: ${{ secrets.PASSWORD }}
+          port: 22
+          source: "deploy.tar.gz"
+          target: "/home/${{ secrets.USERNAME }}/ecommerce-app"
+          strip_components: 0
+
+      - name: Deploy to Azure VM via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          password: ${{ secrets.PASSWORD }}
+          port: 22
+          script: |
+            cd /home/${{ secrets.USERNAME }}/ecommerce-app
+            
+            # Extract and deploy
+            tar -xzf deploy.tar.gz
+            cp -r deploy/* .
+            
+            # Stop and clean existing containers
+            sudo docker compose -f docker/compose.production.yaml down 2>/dev/null || true
+            sudo docker image prune -af >/dev/null 2>&1 || true
+            
+            # Start services
+            echo "🚀 Deploying services..."
+            sudo docker compose -f docker/compose.production.yaml up -d --build
+            
+            # Wait and verify
+            sleep 20
+            echo "📊 Service status:"
+            sudo docker compose -f docker/compose.production.yaml ps
+
+      - name: Verify deployment
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          password: ${{ secrets.PASSWORD }}
+          port: 22
+          script: |
+            cd /home/${{ secrets.USERNAME }}/ecommerce-app
+            # Test gateway endpoint (port 5921 as specified in architecture)
+            curl -f http://localhost:5921/health && echo "✅ Deployment successful!" || echo "❌ Health check failed"
+            sudo docker compose -f docker/compose.production.yaml ps
