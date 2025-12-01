@@ -9,8 +9,6 @@ services:
     container_name: backend_dev
     env_file:
       - ../.env
-    ports:
-      - "3847:3847"
     networks:
       - app-network
     volumes:
